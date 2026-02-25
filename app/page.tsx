@@ -92,8 +92,9 @@ export default function Home() {
         return;
       }
 
+      // ✅ Explicitly type the map parameter
       const processed: Stock[] = data.data
-        .map((s: any) => {
+        .map((s: any): Stock | null => {
           if (!s?.d) return null;
 
           const name = s.d[0] ?? "Unknown";
@@ -157,7 +158,6 @@ export default function Home() {
         // ✅ TypeScript-safe filter
         .filter((s): s is Stock => s !== null);
 
-      // Filter intraday if selected
       const finalList =
         sortBy === "intraday" ? processed.filter((s) => s.intraday) : processed;
 
