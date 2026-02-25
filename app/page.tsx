@@ -48,7 +48,6 @@ export default function Home() {
     setStocks([]);
 
     try {
-      // Fetch NIFTY change
       const niftyRes = await fetch("/api/scan", {
         method: "POST",
         body: JSON.stringify({
@@ -61,8 +60,6 @@ export default function Home() {
       const niftyVal = round(niftyData?.data?.[0]?.d?.[0] ?? 0);
       setNiftyChange(niftyVal);
 
-      const columns = ["name", "close", "change", "volume", "RSI", "sector"];
-
       const payload = {
         filter: [
           { left: "exchange", operation: "equal", right: "NSE" },
@@ -71,7 +68,7 @@ export default function Home() {
             : []),
         ],
         symbols: { query: { types: [] }, tickers: [] },
-        columns,
+        columns: ["name", "close", "change", "volume", "RSI", "sector"],
         sort: {
           sortBy: sortBy === "gainers" ? "change" : "change",
           sortOrder: sortBy === "gainers" ? "desc" : "asc",
@@ -85,78 +82,77 @@ export default function Home() {
       });
 
       const data = await res.json();
-
-      if (!data || !data.data || !Array.isArray(data.data)) {
+      if (!data?.data || !Array.isArray(data.data)) {
         console.warn("Empty/Invalid API response:", data);
         setLoading(false);
         return;
       }
 
-      // ✅ Explicitly type the map parameter
-      const processed: Stock[] = data.data
-        .map((s: any): Stock | null => {
-          if (!s?.d) return null;
+      // ✅ Explicitly type the map parameter AND return array type
+      const mapped: (Stock | null)[] = data.data.map((item: any): Stock | null => {
+        if (!item?.d) return null;
 
-          const name = s.d[0] ?? "Unknown";
-          const close = round(s.d[1]);
-          const change = round(s.d[2]);
-          const volume = s.d[3] ?? 0;
-          const rsi = round(s.d[4]);
-          const sectorName = s.d[5] || "Unknown";
+        const name = item.d[0] ?? "Unknown";
+        const close = round(item.d[1]);
+        const change = round(item.d[2]);
+        const volume = item.d[3] ?? 0;
+        const rsi = round(item.d[4]);
+        const sectorName = item.d[5] || "Unknown";
 
-          if (close === 0 && change === 0) return null;
+        if (close === 0 && change === 0) return null;
 
-          // Probability & signal calculation
-          let score = 0;
-          if (change > 3) score += 20;
-          if (volume > 1000000) score += 20;
-          if (rsi > 55) score += 20;
-          if (change > niftyVal) score += 20;
-          if (rsi > 60) score += 20;
+        let score = 0;
+        if (change > 3) score += 20;
+        if (volume > 1000000) score += 20;
+        if (rsi > 55) score += 20;
+        if (change > niftyVal) score += 20;
+        if (rsi > 60) score += 20;
 
-          let targetMultiplier = 1.08;
-          let stopMultiplier = 0.94;
-          if (strategy === "conservative") {
-            targetMultiplier = 1.05;
-            stopMultiplier = 0.97;
-            score += 5;
-          } else if (strategy === "aggressive") {
-            targetMultiplier = 1.15;
-            stopMultiplier = 0.90;
-            score -= 5;
-          }
+        let targetMultiplier = 1.08;
+        let stopMultiplier = 0.94;
+        if (strategy === "conservative") {
+          targetMultiplier = 1.05;
+          stopMultiplier = 0.97;
+          score += 5;
+        } else if (strategy === "aggressive") {
+          targetMultiplier = 1.15;
+          stopMultiplier = 0.90;
+          score -= 5;
+        }
 
-          const probability = round(score);
-          const target = round(close * targetMultiplier);
-          const stopLoss = round(close * stopMultiplier);
+        const probability = round(score);
+        const target = round(close * targetMultiplier);
+        const stopLoss = round(close * stopMultiplier);
 
-          let signal = "HOLD";
-          if (probability >= 75) signal = "STRONG BUY";
-          else if (probability >= 60) signal = "BUY";
-          else if (probability < 40) signal = "SELL";
+        let signal = "HOLD";
+        if (probability >= 75) signal = "STRONG BUY";
+        else if (probability >= 60) signal = "BUY";
+        else if (probability < 40) signal = "SELL";
 
-          const intraday = change >= 2 && volume > 500000;
+        const intraday = change >= 2 && volume > 500000;
 
-          const stock: Stock = {
-            name,
-            close,
-            change,
-            volume,
-            rsi,
-            probability,
-            target,
-            stopLoss,
-            signal,
-            sector: sectorName,
-            intraday,
-          };
+        const stock: Stock = {
+          name,
+          close,
+          change,
+          volume,
+          rsi,
+          probability,
+          target,
+          stopLoss,
+          signal,
+          sector: sectorName,
+          intraday,
+        };
 
-          if (signal === "STRONG BUY") sendNotification(stock);
+        if (signal === "STRONG BUY") sendNotification(stock);
+        return stock;
+      });
 
-          return stock;
-        })
-        // ✅ TypeScript-safe filter
-        .filter((s): s is Stock => s !== null);
+      // ✅ Type-safe filter with explicit parameter type
+      const processed: Stock[] = mapped.filter(
+        (s: Stock | null): s is Stock => s !== null
+      );
 
       const finalList =
         sortBy === "intraday" ? processed.filter((s) => s.intraday) : processed;
@@ -166,7 +162,6 @@ export default function Home() {
       console.error("Fetch error:", err);
       setStocks([]);
     }
-
     setLoading(false);
   };
 
