@@ -154,7 +154,8 @@ export default function Home() {
 
           return stock;
         })
-        .filter((s) => s !== null) as Stock[];
+        // ✅ TypeScript-safe filter
+        .filter((s): s is Stock => s !== null);
 
       // Filter intraday if selected
       const finalList =
