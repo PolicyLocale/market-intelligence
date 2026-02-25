@@ -22,7 +22,9 @@ export default function Home() {
   const [stocks, setStocks] = useState<Stock[]>([]);
   const [loading, setLoading] = useState(false);
   const [niftyChange, setNiftyChange] = useState(0);
-  const [sortBy, setSortBy] = useState<"gainers" | "losers" | "intraday">("gainers");
+  const [sortBy, setSortBy] = useState<"gainers" | "losers" | "intraday">(
+    "gainers"
+  );
 
   const round = (n: number | null | undefined) => {
     if (n === null || n === undefined || isNaN(n)) return 0;
@@ -71,7 +73,7 @@ export default function Home() {
         symbols: { query: { types: [] }, tickers: [] },
         columns,
         sort: {
-          sortBy: sortBy === "gainers" ? "change" : sortBy === "losers" ? "change" : "change",
+          sortBy: sortBy === "gainers" ? "change" : "change",
           sortOrder: sortBy === "gainers" ? "desc" : "asc",
         },
         range: [0, 50],
@@ -132,7 +134,7 @@ export default function Home() {
           else if (probability >= 60) signal = "BUY";
           else if (probability < 40) signal = "SELL";
 
-          const intraday = change >= 2 && volume > 500000; // Intraday condition
+          const intraday = change >= 2 && volume > 500000;
 
           const stock: Stock = {
             name,
@@ -154,7 +156,7 @@ export default function Home() {
         })
         .filter((s) => s !== null) as Stock[];
 
-      // If intraday filter is selected
+      // Filter intraday if selected
       const finalList =
         sortBy === "intraday" ? processed.filter((s) => s.intraday) : processed;
 
