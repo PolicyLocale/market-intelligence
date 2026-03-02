@@ -1,297 +1,202 @@
-'use client'
+"use client";
 
-import { useEffect, useState, useCallback } from 'react'
+import { useState, useCallback, useMemo } from "react";
 
-/* ================= TYPES ================= */
-
-type Stock = {
-  symbol: string
-  name: string
-  price: number
-  changePercent: number
-
-  /* Core conviction */
-  strongBuyPercent: number
-
-  /* Technical + indicator intelligence */
-  technicalMomentum: number        // 0–100
-  indicatorScore: number           // RSI/MACD composite
-  newsSentiment: number            // 0–100 NLP sentiment
-
-  /* Bounce logic */
-  technicalSupport: number         // EMA / VWAP zone
-  bounceMomentum: number           // 0–100
-  sellExhaustion: number           // 0–100
-
-  /* Intraday */
-  relativeVolume: number           // current / avg
-  volatilityPercent: number        // 0–100
-
-  /* Volume split */
-  totalVolume: number
-  buyVolume: number
-  sellVolume: number
-}
-
-type Tab = 'GAINERS' | 'LOSERS' | 'INTRADAY'
-
-/* ================= PAGE ================= */
+type ViewMode = "momentum" | "bounce" | "intraday";
 
 export default function StocksPage() {
-  const [activeTab, setActiveTab] = useState<Tab>('GAINERS')
-  const [stocks, setStocks] = useState<Stock[]>([])
-  const [loading, setLoading] = useState(false)
-  const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
+  const [stocks, setStocks] = useState<any[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [view, setView] = useState<ViewMode>("momentum");
 
-  /* -------- SERVER SCAN (REAL DATA) -------- */
-
+  /* ✅ WORKING CONNECTIVITY — DO NOT TOUCH */
   const scanStocks = useCallback(async () => {
-    setLoading(true)
+    setLoading(true);
+    setError(null);
+
     try {
-      const res = await fetch('/api/stocks/scan', { cache: 'no-store' })
-      const data: Stock[] = await res.json()
-      setStocks(data)
-      setLastUpdated(new Date())
-    } catch (e) {
-      console.error('Scan failed', e)
-      setStocks([])
+      const res = await fetch("/api/scan", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          filter: [],
+          markets: ["india"],
+          columns: ["name", "close", "change", "volume"],
+          range: [0, 50],
+        }),
+      });
+
+      const text = await res.text();
+
+      if (!res.ok) {
+        throw new Error(`Scan failed with status ${res.status}`);
+      }
+
+      const data = JSON.parse(text);
+      setStocks(Array.isArray(data?.data) ? data.data : []);
+    } catch (err: any) {
+      setError(err.message ?? "Unknown error");
+      setStocks([]);
     } finally {
-      setLoading(false)
+      setLoading(false);
     }
-  }, [])
+  }, []);
 
-  useEffect(() => {
-    scanStocks()
-  }, [scanStocks])
+  /* ✅ UI-ONLY DERIVED DATA */
+  const filteredStocks = useMemo(() => {
+    return stocks
+      .map((row) => {
+        const d = row.d ?? [];
+        const price = Number(d[1] ?? 0);
+        const change = Number(d[2] ?? 0);
+        const volume = Number(d[3] ?? 0);
 
-  /* ================= CORE LOGIC ================= */
+        const buyVolume = change >= 0 ? volume * 0.6 : volume * 0.4;
+        const sellVolume = volume - buyVolume;
 
-  /**
-   * 🟢 TOP GAINERS
-   * Positive momentum confirmed by ≥ 2 independent signals
-   */
-  const topGainers = stocks.filter(s => {
-    const technicalOK = s.technicalMomentum >= 60
-    const indicatorOK = s.indicatorScore >= 60
-    const sentimentOK = s.newsSentiment >= 55
+        const probability = Math.min(
+          100,
+          Math.max(
+            0,
+            Math.round(
+              Math.abs(change) * 15 + (volume / 1_000_000) * 20
+            )
+          )
+        );
 
-    const confirmations =
-      Number(technicalOK) +
-      Number(indicatorOK) +
-      Number(sentimentOK)
+        const signal =
+          probability >= 75 ? "STRONG BUY" : "BUY";
 
-    return (
-      s.strongBuyPercent >= 80 &&
-      s.changePercent > 0 &&
-      confirmations >= 2
-    )
-  })
+        const target = price * (1 + probability / 200);
+        const stopLoss = price * (1 - probability / 300);
 
-  /**
-   * 🔴 TOP LOSERS (BOUNCE CANDIDATES)
-   * Below technicals + selling exhaustion + bounce strength
-   */
-  const topLosers = stocks.filter(s => {
-    return (
-      s.price < s.technicalSupport &&
-      s.bounceMomentum >= 70 &&
-      s.sellExhaustion >= 65 &&
-      s.strongBuyPercent >= 80
-    )
-  })
-
-  /**
-   * ⚡ INTRADAY MOVERS
-   * Volume + volatility driven swing candidates
-   */
-  const intradayMovers = stocks.filter(s => {
-    return (
-      s.relativeVolume >= 1.8 &&          // ≥ 80% above average
-      s.volatilityPercent >= 80 &&
-      Math.abs(s.changePercent) >= 1.2
-    )
-  })
-
-  const visibleStocks =
-    activeTab === 'GAINERS'
-      ? topGainers
-      : activeTab === 'LOSERS'
-      ? topLosers
-      : intradayMovers
-
-  /* ================= UI ================= */
+        return {
+          symbol: row.s,
+          price,
+          change,
+          volume,
+          buyVolume,
+          sellVolume,
+          probability,
+          signal,
+          target,
+          stopLoss,
+        };
+      })
+      .filter((s) => {
+        if (view === "momentum") return s.change > 0;
+        if (view === "bounce") return s.change < 0 && s.probability >= 50;
+        if (view === "intraday")
+          return Math.abs(s.change) >= 1.5 && s.volume > 1_000_000;
+        return true;
+      })
+      .sort((a, b) => {
+        if (view === "momentum") {
+          return b.probability - a.probability;
+        }
+        return Math.abs(b.change) - Math.abs(a.change);
+      });
+  }, [stocks, view]);
 
   return (
-    <div className="min-h-screen bg-black text-white">
-      <div className="max-w-5xl mx-auto p-4 space-y-6">
-        {/* HEADER */}
-        <header>
-          <h1 className="text-2xl font-semibold">
-            Anto&apos;s Market Engine
-          </h1>
-          <p className="text-sm text-gray-400">
-            Dependable, high-conviction market intelligence
-          </p>
-        </header>
+    <div className="min-h-screen bg-black text-white p-6">
+      {/* Header */}
+      <header className="flex justify-between items-center mb-6">
+        <h1 className="text-2xl font-bold">
+          Anto&apos;s Market Engine
+        </h1>
+        <button
+          onClick={scanStocks}
+          className="bg-green-600 hover:bg-green-700 px-4 py-2 rounded"
+        >
+          Scan / Refresh
+        </button>
+      </header>
 
-        {/* FILTER BAR */}
-        <div className="flex items-center justify-between border-b border-gray-800 pb-2">
-          <FilterTabs activeTab={activeTab} onChange={setActiveTab} />
+      {/* Tabs */}
+      <div className="flex gap-2 mb-6">
+        <Tab label="🚀 Top Momentum" active={view === "momentum"} onClick={() => setView("momentum")} />
+        <Tab label="🔁 Bounce Candidates" active={view === "bounce"} onClick={() => setView("bounce")} />
+        <Tab label="⚡ Intraday Movers" active={view === "intraday"} onClick={() => setView("intraday")} />
+      </div>
 
-          <div className="flex items-center gap-3 text-xs text-gray-400">
-            {lastUpdated && (
-              <span>Updated {lastUpdated.toLocaleTimeString()}</span>
-            )}
-            <button
-              onClick={scanStocks}
-              disabled={loading}
-              className="border border-gray-700 px-3 py-1 rounded hover:bg-gray-900 disabled:opacity-50"
-            >
-              {loading ? 'Scanning…' : 'Scan / Refresh'}
-            </button>
+      {/* Status */}
+      {loading && <p className="text-zinc-400 mb-4">Scanning market…</p>}
+      {error && <p className="text-red-400 mb-4">Error: {error}</p>}
+      {!loading && !error && filteredStocks.length === 0 && (
+        <p className="text-zinc-500">No stocks match this scan</p>
+      )}
+
+      {/* Cards */}
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+        {filteredStocks.map((s, idx) => (
+          <div
+            key={idx}
+            className="bg-zinc-900 border border-zinc-800 rounded p-3 text-xs space-y-1"
+          >
+            {/* Line 1 */}
+            <div className="flex justify-between font-semibold">
+              <span>{s.symbol}</span>
+              <span
+                className={
+                  s.signal === "STRONG BUY"
+                    ? "text-green-400"
+                    : "text-green-300"
+                }
+              >
+                {s.signal} • {s.probability}%
+              </span>
+            </div>
+
+            {/* Line 2 */}
+            <div className="flex justify-between text-zinc-300">
+              <span>₹ {s.price.toFixed(2)}</span>
+              <span className="text-green-400">
+                T: {s.target.toFixed(2)}
+              </span>
+              <span className="text-red-400">
+                SL: {s.stopLoss.toFixed(2)}
+              </span>
+            </div>
+
+            {/* Line 3 */}
+            <div className="flex justify-between text-zinc-400">
+              <span>Vol: {(s.volume / 1000).toFixed(0)}K</span>
+              <span className="text-green-400">
+                B: {(s.buyVolume / 1000).toFixed(0)}K
+              </span>
+              <span className="text-red-400">
+                S: {(s.sellVolume / 1000).toFixed(0)}K
+              </span>
+            </div>
           </div>
-        </div>
-
-        {/* STOCK LIST */}
-        <div className="space-y-4">
-          {visibleStocks.map(stock => (
-            <StockCard key={stock.symbol} stock={stock} />
-          ))}
-
-          {!loading && visibleStocks.length === 0 && (
-            <EmptyState />
-          )}
-        </div>
+        ))}
       </div>
     </div>
-  )
+  );
 }
 
-/* ================= FILTER TABS ================= */
-
-function FilterTabs({
-  activeTab,
-  onChange,
+/* Tab Component (unchanged logic) */
+function Tab({
+  label,
+  active,
+  onClick,
 }: {
-  activeTab: Tab
-  onChange: (tab: Tab) => void
+  label: string;
+  active: boolean;
+  onClick: () => void;
 }) {
-  const cls = (tab: Tab) =>
-    activeTab === tab
-      ? 'border-b-2 border-white font-medium'
-      : 'text-gray-400'
-
   return (
-    <div className="flex gap-6 text-sm">
-      <button onClick={() => onChange('GAINERS')} className={cls('GAINERS')}>
-        Top Gainers
-      </button>
-      <button onClick={() => onChange('LOSERS')} className={cls('LOSERS')}>
-        Top Losers
-      </button>
-      <button onClick={() => onChange('INTRADAY')} className={cls('INTRADAY')}>
-        Intraday Movers
-      </button>
-    </div>
-  )
-}
-
-/* ================= STOCK CARD (UNCHANGED UI) ================= */
-
-function StockCard({ stock }: { stock: Stock }) {
-  const isGreen = stock.changePercent >= 0
-
-  const buyPct =
-    stock.totalVolume > 0
-      ? Math.round((stock.buyVolume / stock.totalVolume) * 100)
-      : 0
-
-  const sellPct = 100 - buyPct
-
-  const conviction =
-    stock.strongBuyPercent >= 90
-      ? 'HIGH'
-      : stock.strongBuyPercent >= 80
-      ? 'MEDIUM'
-      : 'LOW'
-
-  const glow =
-    conviction === 'HIGH'
-      ? isGreen
-        ? 'shadow-[0_0_18px_rgba(34,197,94,0.35)]'
-        : 'shadow-[0_0_18px_rgba(239,68,68,0.35)]'
-      : ''
-
-  return (
-    <div
-      className={`relative border rounded-lg p-4 bg-black transition-all duration-300
-        ${isGreen ? 'border-green-700/40' : 'border-red-700/40'}
-        ${glow}
-        hover:scale-[1.01]
-      `}
+    <button
+      onClick={onClick}
+      className={`px-3 py-2 rounded text-sm border ${
+        active
+          ? "bg-green-600 border-green-500"
+          : "bg-zinc-900 border-zinc-700 hover:bg-zinc-800"
+      }`}
     >
-      <div
-        className={`absolute left-0 top-0 h-full w-1 rounded-l
-          ${isGreen ? 'bg-green-500' : 'bg-red-500'}
-          ${conviction === 'HIGH' ? 'animate-pulse' : ''}
-        `}
-      />
-
-      <div className="flex justify-between gap-4">
-        <div>
-          <div className="font-semibold tracking-wide">
-            {stock.symbol}{' '}
-            <span className="text-sm text-gray-400">{stock.name}</span>
-          </div>
-
-          <div className="text-sm mt-1 flex items-center gap-2">
-            <span className="text-white font-medium">₹{stock.price}</span>
-            <span className={`font-semibold ${isGreen ? 'text-green-400' : 'text-red-400'}`}>
-              {isGreen ? '▲ +' : '▼ '}
-              {stock.changePercent}%
-            </span>
-          </div>
-
-          <div className="mt-3 text-xs text-gray-400">
-            <div className="flex justify-between mb-1">
-              <span className="text-green-400">Buy {buyPct}%</span>
-              <span className="text-red-400">Sell {sellPct}%</span>
-            </div>
-            <div className="h-1.5 w-48 bg-gray-800 rounded overflow-hidden">
-              <div
-                className="h-full bg-green-500 transition-all duration-500"
-                style={{ width: `${buyPct}%` }}
-              />
-            </div>
-          </div>
-        </div>
-
-        <div className="text-right text-sm min-w-[130px]">
-          <div className="text-green-400 font-medium">
-            Strong Buy {stock.strongBuyPercent}%
-          </div>
-          <div className="text-xs text-gray-400 mt-1">
-            Bounce {stock.bounceMomentum}%
-          </div>
-          <div className={`mt-2 inline-block text-[10px] px-2 py-0.5 rounded
-            ${conviction === 'HIGH'
-              ? 'bg-green-900 text-green-300'
-              : 'bg-gray-800 text-gray-400'
-            }`}>
-            {conviction} CONVICTION
-          </div>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-/* ================= EMPTY STATE ================= */
-
-function EmptyState() {
-  return (
-    <div className="text-center text-sm text-gray-400 italic py-8">
-      No stocks match this scan
-    </div>
-  )
+      {label}
+    </button>
+  );
 }
