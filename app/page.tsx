@@ -2,22 +2,40 @@
 
 import { useEffect, useState, useCallback } from 'react'
 
+/* ================= TYPES ================= */
+
 type Stock = {
   symbol: string
   name: string
   price: number
   changePercent: number
+
+  /* Core conviction */
   strongBuyPercent: number
-  growthProbability: number
-  fairValue: number
-  bounceMomentum: number
+
+  /* Technical + indicator intelligence */
+  technicalMomentum: number        // 0–100
+  indicatorScore: number           // RSI/MACD composite
+  newsSentiment: number            // 0–100 NLP sentiment
+
+  /* Bounce logic */
+  technicalSupport: number         // EMA / VWAP zone
+  bounceMomentum: number           // 0–100
+  sellExhaustion: number           // 0–100
+
+  /* Intraday */
+  relativeVolume: number           // current / avg
+  volatilityPercent: number        // 0–100
+
+  /* Volume split */
   totalVolume: number
   buyVolume: number
   sellVolume: number
-  isIntradayMover: boolean
 }
 
 type Tab = 'GAINERS' | 'LOSERS' | 'INTRADAY'
+
+/* ================= PAGE ================= */
 
 export default function StocksPage() {
   const [activeTab, setActiveTab] = useState<Tab>('GAINERS')
@@ -25,16 +43,17 @@ export default function StocksPage() {
   const [loading, setLoading] = useState(false)
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
 
-  /* 🔌 SERVER SCAN */
+  /* -------- SERVER SCAN (REAL DATA) -------- */
+
   const scanStocks = useCallback(async () => {
     setLoading(true)
     try {
       const res = await fetch('/api/stocks/scan', { cache: 'no-store' })
-      const data = await res.json()
+      const data: Stock[] = await res.json()
       setStocks(data)
       setLastUpdated(new Date())
-    } catch (err) {
-      console.error('Scan failed', err)
+    } catch (e) {
+      console.error('Scan failed', e)
       setStocks([])
     } finally {
       setLoading(false)
@@ -45,23 +64,53 @@ export default function StocksPage() {
     scanStocks()
   }, [scanStocks])
 
-  /* ---------------- FILTERING LOGIC ---------------- */
+  /* ================= CORE LOGIC ================= */
 
-  const topGainers = stocks.filter(
-    s =>
+  /**
+   * 🟢 TOP GAINERS
+   * Positive momentum confirmed by ≥ 2 independent signals
+   */
+  const topGainers = stocks.filter(s => {
+    const technicalOK = s.technicalMomentum >= 60
+    const indicatorOK = s.indicatorScore >= 60
+    const sentimentOK = s.newsSentiment >= 55
+
+    const confirmations =
+      Number(technicalOK) +
+      Number(indicatorOK) +
+      Number(sentimentOK)
+
+    return (
       s.strongBuyPercent >= 80 &&
-      s.growthProbability >= 70 &&
-      !s.isIntradayMover
-  )
+      s.changePercent > 0 &&
+      confirmations >= 2
+    )
+  })
 
-  const topLosers = stocks.filter(
-    s =>
-      s.price < s.fairValue &&
+  /**
+   * 🔴 TOP LOSERS (BOUNCE CANDIDATES)
+   * Below technicals + selling exhaustion + bounce strength
+   */
+  const topLosers = stocks.filter(s => {
+    return (
+      s.price < s.technicalSupport &&
       s.bounceMomentum >= 70 &&
-      s.strongBuyPercent >= 75
-  )
+      s.sellExhaustion >= 65 &&
+      s.strongBuyPercent >= 80
+    )
+  })
 
-  const intradayMovers = stocks.filter(s => s.isIntradayMover)
+  /**
+   * ⚡ INTRADAY MOVERS
+   * Volume + volatility driven swing candidates
+   */
+  const intradayMovers = stocks.filter(s => {
+    return (
+      s.relativeVolume >= 1.8 &&          // ≥ 80% above average
+      s.volatilityPercent >= 80 &&
+      Math.abs(s.changePercent) >= 1.2
+    )
+  })
 
   const visibleStocks =
     activeTab === 'GAINERS'
@@ -69,6 +118,8 @@ export default function StocksPage() {
       : activeTab === 'LOSERS'
       ? topLosers
       : intradayMovers
+
+  /* ================= UI ================= */
 
   return (
     <div className="min-h-screen bg-black text-white">
@@ -79,7 +130,7 @@ export default function StocksPage() {
             Anto&apos;s Market Engine
           </h1>
           <p className="text-sm text-gray-400">
-            High-conviction market scanner
+            Dependable, high-conviction market intelligence
           </p>
         </header>
 
@@ -89,9 +140,7 @@ export default function StocksPage() {
 
           <div className="flex items-center gap-3 text-xs text-gray-400">
             {lastUpdated && (
-              <span>
-                Updated {lastUpdated.toLocaleTimeString()}
-              </span>
+              <span>Updated {lastUpdated.toLocaleTimeString()}</span>
             )}
             <button
               onClick={scanStocks}
@@ -118,7 +167,7 @@ export default function StocksPage() {
   )
 }
 
-/* ---------------- FILTER TABS ---------------- */
+/* ================= FILTER TABS ================= */
 
 function FilterTabs({
   activeTab,
@@ -147,7 +196,7 @@ function FilterTabs({
   )
 }
 
-/* ---------------- ENGAGING STOCK CARD ---------------- */
+/* ================= STOCK CARD (UNCHANGED UI) ================= */
 
 function StockCard({ stock }: { stock: Stock }) {
   const isGreen = stock.changePercent >= 0
@@ -181,7 +230,6 @@ function StockCard({ stock }: { stock: Stock }) {
         hover:scale-[1.01]
       `}
     >
-      {/* SIGNAL STRIP */}
       <div
         className={`absolute left-0 top-0 h-full w-1 rounded-l
           ${isGreen ? 'bg-green-500' : 'bg-red-500'}
@@ -190,30 +238,20 @@ function StockCard({ stock }: { stock: Stock }) {
       />
 
       <div className="flex justify-between gap-4">
-        {/* LEFT */}
         <div>
           <div className="font-semibold tracking-wide">
             {stock.symbol}{' '}
-            <span className="text-sm text-gray-400">
-              {stock.name}
-            </span>
+            <span className="text-sm text-gray-400">{stock.name}</span>
           </div>
 
           <div className="text-sm mt-1 flex items-center gap-2">
-            <span className="text-white font-medium">
-              ₹{stock.price}
-            </span>
-            <span
-              className={`font-semibold flex items-center gap-1
-                ${isGreen ? 'text-green-400' : 'text-red-400'}
-              `}
-            >
+            <span className="text-white font-medium">₹{stock.price}</span>
+            <span className={`font-semibold ${isGreen ? 'text-green-400' : 'text-red-400'}`}>
               {isGreen ? '▲ +' : '▼ '}
               {stock.changePercent}%
             </span>
           </div>
 
-          {/* BUY / SELL VOLUME */}
           <div className="mt-3 text-xs text-gray-400">
             <div className="flex justify-between mb-1">
               <span className="text-green-400">Buy {buyPct}%</span>
@@ -228,7 +266,6 @@ function StockCard({ stock }: { stock: Stock }) {
           </div>
         </div>
 
-        {/* RIGHT */}
         <div className="text-right text-sm min-w-[130px]">
           <div className="text-green-400 font-medium">
             Strong Buy {stock.strongBuyPercent}%
@@ -236,16 +273,11 @@ function StockCard({ stock }: { stock: Stock }) {
           <div className="text-xs text-gray-400 mt-1">
             Bounce {stock.bounceMomentum}%
           </div>
-
-          <div
-            className={`mt-2 inline-block text-[10px] px-2 py-0.5 rounded
-              ${
-                conviction === 'HIGH'
-                  ? 'bg-green-900 text-green-300'
-                  : 'bg-gray-800 text-gray-400'
-              }
-            `}
-          >
+          <div className={`mt-2 inline-block text-[10px] px-2 py-0.5 rounded
+            ${conviction === 'HIGH'
+              ? 'bg-green-900 text-green-300'
+              : 'bg-gray-800 text-gray-400'
+            }`}>
             {conviction} CONVICTION
           </div>
         </div>
@@ -254,7 +286,7 @@ function StockCard({ stock }: { stock: Stock }) {
   )
 }
 
-/* ---------------- EMPTY STATE ---------------- */
+/* ================= EMPTY STATE ================= */
 
 function EmptyState() {
   return (
