@@ -1,284 +1,234 @@
-"use client";
+'use client'
 
-import { useState, useEffect } from "react";
+import React from 'react'
 
 type Stock = {
-  name: string;
-  close: number;
-  change: number;
-  volume: number;
-  rsi: number;
-  probability: number;
-  target: number;
-  stopLoss: number;
-  signal: string;
-  sector: string;
-  intraday: boolean;
-};
+  symbol: string
+  name: string
+  price: number
+  changePercent: number
+  strongBuyPercent: number
+  growthProbability: number
+  totalVolume: number
+  buyVolume: number
+  sellVolume: number
+  isIntradayMover: boolean
+}
 
-export default function Home() {
-  const [strategy, setStrategy] = useState("all");
-  const [sector, setSector] = useState("ALL");
-  const [stocks, setStocks] = useState<Stock[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [niftyChange, setNiftyChange] = useState(0);
-  const [sortBy, setSortBy] = useState<"gainers" | "losers" | "intraday">(
-    "gainers"
-  );
+/* ---------------- SIMULATED STOCK DATA ---------------- */
 
-  const round = (n: number | null | undefined) => {
-    if (n === null || n === undefined || isNaN(n)) return 0;
-    return Number(n.toFixed(2));
-  };
+const STOCKS: Stock[] = [
+  {
+    symbol: 'TCS',
+    name: 'Tata Consultancy Services',
+    price: 3895,
+    changePercent: 2.4,
+    strongBuyPercent: 86,
+    growthProbability: 78,
+    totalVolume: 1200000,
+    buyVolume: 820000,
+    sellVolume: 380000,
+    isIntradayMover: false,
+  },
+  {
+    symbol: 'INFY',
+    name: 'Infosys',
+    price: 1620,
+    changePercent: 1.9,
+    strongBuyPercent: 82,
+    growthProbability: 74,
+    totalVolume: 980000,
+    buyVolume: 610000,
+    sellVolume: 370000,
+    isIntradayMover: false,
+  },
+  {
+    symbol: 'HDFCBANK',
+    name: 'HDFC Bank',
+    price: 1485,
+    changePercent: 0.8,
+    strongBuyPercent: 77, // ❌ filtered out
+    growthProbability: 70,
+    totalVolume: 2100000,
+    buyVolume: 1200000,
+    sellVolume: 900000,
+    isIntradayMover: false,
+  },
+  {
+    symbol: 'RELIANCE',
+    name: 'Reliance Industries',
+    price: 2920,
+    changePercent: 3.1,
+    strongBuyPercent: 88,
+    growthProbability: 82,
+    totalVolume: 2500000,
+    buyVolume: 1800000,
+    sellVolume: 700000,
+    isIntradayMover: true,
+  },
+  {
+    symbol: 'ICICIBANK',
+    name: 'ICICI Bank',
+    price: 1125,
+    changePercent: -1.3,
+    strongBuyPercent: 84,
+    growthProbability: 76,
+    totalVolume: 1700000,
+    buyVolume: 700000,
+    sellVolume: 1000000,
+    isIntradayMover: true,
+  },
+]
 
-  useEffect(() => {
-    if ("Notification" in window) Notification.requestPermission();
-  }, []);
+/* ---------------- PAGE ---------------- */
 
-  const sendNotification = (stock: Stock) => {
-    if (Notification.permission === "granted") {
-      new Notification(`🚀 STRONG BUY: ${stock.name}`, {
-        body: `Target ₹${stock.target} | SL ₹${stock.stopLoss}`,
-      });
-    }
-  };
+export default function StocksPage() {
+  /** TOP GAINERS — High conviction + high growth */
+  const topGainers = STOCKS.filter(
+    s =>
+      s.strongBuyPercent >= 80 &&
+      s.growthProbability >= 70 &&
+      !s.isIntradayMover
+  )
 
-  const fetchData = async () => {
-    setLoading(true);
-    setStocks([]);
-
-    try {
-      const niftyRes = await fetch("/api/scan", {
-        method: "POST",
-        body: JSON.stringify({
-          symbols: { tickers: ["NSE:NIFTY"], query: { types: [] } },
-          columns: ["change"],
-        }),
-      });
-
-      const niftyData = await niftyRes.json();
-      const niftyVal = round(niftyData?.data?.[0]?.d?.[0] ?? 0);
-      setNiftyChange(niftyVal);
-
-      const payload = {
-        filter: [
-          { left: "exchange", operation: "equal", right: "NSE" },
-          ...(sector !== "ALL"
-            ? [{ left: "sector", operation: "equal", right: sector }]
-            : []),
-        ],
-        symbols: { query: { types: [] }, tickers: [] },
-        columns: ["name", "close", "change", "volume", "RSI", "sector"],
-        sort: {
-          sortBy: sortBy === "gainers" ? "change" : "change",
-          sortOrder: sortBy === "gainers" ? "desc" : "asc",
-        },
-        range: [0, 50],
-      };
-
-      const res = await fetch("/api/scan", {
-        method: "POST",
-        body: JSON.stringify(payload),
-      });
-
-      const data = await res.json();
-      if (!data?.data || !Array.isArray(data.data)) {
-        console.warn("Empty/Invalid API response:", data);
-        setLoading(false);
-        return;
-      }
-
-      // ✅ Explicitly type the map parameter AND return array type
-      const mapped: (Stock | null)[] = data.data.map((item: any): Stock | null => {
-        if (!item?.d) return null;
-
-        const name = item.d[0] ?? "Unknown";
-        const close = round(item.d[1]);
-        const change = round(item.d[2]);
-        const volume = item.d[3] ?? 0;
-        const rsi = round(item.d[4]);
-        const sectorName = item.d[5] || "Unknown";
-
-        if (close === 0 && change === 0) return null;
-
-        let score = 0;
-        if (change > 3) score += 20;
-        if (volume > 1000000) score += 20;
-        if (rsi > 55) score += 20;
-        if (change > niftyVal) score += 20;
-        if (rsi > 60) score += 20;
-
-        let targetMultiplier = 1.08;
-        let stopMultiplier = 0.94;
-        if (strategy === "conservative") {
-          targetMultiplier = 1.05;
-          stopMultiplier = 0.97;
-          score += 5;
-        } else if (strategy === "aggressive") {
-          targetMultiplier = 1.15;
-          stopMultiplier = 0.90;
-          score -= 5;
-        }
-
-        const probability = round(score);
-        const target = round(close * targetMultiplier);
-        const stopLoss = round(close * stopMultiplier);
-
-        let signal = "HOLD";
-        if (probability >= 75) signal = "STRONG BUY";
-        else if (probability >= 60) signal = "BUY";
-        else if (probability < 40) signal = "SELL";
-
-        const intraday = change >= 2 && volume > 500000;
-
-        const stock: Stock = {
-          name,
-          close,
-          change,
-          volume,
-          rsi,
-          probability,
-          target,
-          stopLoss,
-          signal,
-          sector: sectorName,
-          intraday,
-        };
-
-        if (signal === "STRONG BUY") sendNotification(stock);
-        return stock;
-      });
-
-      // ✅ Type-safe filter with explicit parameter type
-      const processed: Stock[] = mapped.filter(
-        (s: Stock | null): s is Stock => s !== null
-      );
-
-      const finalList =
-        sortBy === "intraday" ? processed.filter((s) => s.intraday) : processed;
-
-      setStocks(finalList);
-    } catch (err) {
-      console.error("Fetch error:", err);
-      setStocks([]);
-    }
-    setLoading(false);
-  };
+  /** INTRADAY MOVERS — separated */
+  const intradayMovers = STOCKS.filter(
+    s =>
+      s.isIntradayMover &&
+      s.strongBuyPercent >= 80
+  )
 
   return (
-    <div className="bg-black min-h-screen text-white p-6">
-      <div className="flex justify-between items-center mb-4">
-        <h1 className="text-3xl font-bold text-green-400">🚀 Anto's Market Engine</h1>
-        <button
-          onClick={fetchData}
-          className="bg-blue-600 px-4 py-2 rounded hover:bg-blue-700 font-bold"
-        >
-          🔍 Scan & Refresh
-        </button>
-      </div>
+    <div className="p-6 max-w-5xl mx-auto space-y-10">
+      <Header />
 
-      <div className="text-gray-400 mb-4">NIFTY Change: {niftyChange}%</div>
-
-      <div className="flex gap-4 mb-6 flex-wrap">
-        <select
-          value={strategy}
-          onChange={(e) => setStrategy(e.target.value)}
-          className="bg-gray-800 px-3 py-2 rounded"
-        >
-          <option value="all">All Strategies</option>
-          <option value="conservative">Conservative</option>
-          <option value="balanced">Balanced</option>
-          <option value="aggressive">Aggressive</option>
-        </select>
-
-        <select
-          value={sector}
-          onChange={(e) => setSector(e.target.value)}
-          className="bg-gray-800 px-3 py-2 rounded"
-        >
-          <option value="ALL">All Sectors</option>
-          <option value="Technology Services">IT</option>
-          <option value="Finance">Finance</option>
-          <option value="Consumer Non-Durables">FMCG</option>
-          <option value="Energy Minerals">Energy</option>
-          <option value="Health Technology">Healthcare</option>
-        </select>
-
-        <select
-          value={sortBy}
-          onChange={(e) =>
-            setSortBy(e.target.value as "gainers" | "losers" | "intraday")
-          }
-          className="bg-gray-800 px-3 py-2 rounded"
-        >
-          <option value="gainers">Top Gainers</option>
-          <option value="losers">Top Losers</option>
-          <option value="intraday">Intraday Movers</option>
-        </select>
-      </div>
-
-      {loading && <p className="text-yellow-400">Scanning market...</p>}
-
-      <div className="grid gap-5">
-        {stocks.length === 0 && !loading && (
-          <p className="text-gray-300">No results available</p>
-        )}
-
-        {stocks.map((s, i) => (
-          <div
-            key={i}
-            className="bg-gray-900 p-5 rounded-2xl border border-gray-800"
-          >
-            <div className="flex justify-between">
-              <div className="font-bold text-lg">{s.name}</div>
-              <div className={s.change > 0 ? "text-green-400" : "text-red-400"}>
-                {s.change}%
-              </div>
-            </div>
-
-            <div className="text-sm text-gray-400 mt-1">
-              ₹{s.close} | Volume: {s.volume.toLocaleString()} | Sector: {s.sector} | RSI: {s.rsi}{" "}
-              {s.intraday && <span className="text-yellow-400 font-bold">| Intraday</span>}
-            </div>
-
-            <div className="mt-2">
-              📊 Probability:{" "}
-              <span
-                className={
-                  s.probability >= 75
-                    ? "text-green-400 font-bold"
-                    : s.probability >= 60
-                    ? "text-yellow-400 font-bold"
-                    : "text-red-400 font-bold"
-                }
-              >
-                {s.probability}%
-              </span>
-            </div>
-
-            <div className="mt-3 bg-gray-800 p-3 rounded">
-              🎯 Target: ₹{s.target}
-              <br />
-              🛑 Stop: ₹{s.stopLoss}
-            </div>
-
-            <div className="mt-2 font-bold">
-              Signal:{" "}
-              <span
-                className={
-                  s.signal === "STRONG BUY"
-                    ? "text-green-400"
-                    : s.signal === "BUY"
-                    ? "text-yellow-400"
-                    : "text-red-400"
-                }
-              >
-                {s.signal}
-              </span>
-            </div>
-          </div>
+      <Section title="🚀 Top Gainers (Strong Buy ≥ 80%)">
+        {topGainers.map(stock => (
+          <StockRow key={stock.symbol} stock={stock} />
         ))}
+        {topGainers.length === 0 && (
+          <EmptyState message="No high-confidence gainers found" />
+        )}
+      </Section>
+
+      <Section title="⚡ Intraday Movers">
+        {intradayMovers.map(stock => (
+          <StockRow key={stock.symbol} stock={stock} />
+        ))}
+        {intradayMovers.length === 0 && (
+          <EmptyState message="No strong intraday movers" />
+        )}
+      </Section>
+    </div>
+  )
+}
+
+/* ---------------- COMPONENTS ---------------- */
+
+function Header() {
+  return (
+    <div>
+      <h1 className="text-2xl font-bold">
+        High-Growth Stock Watchlist
+      </h1>
+      <p className="text-gray-600">
+        Showing only high-confidence stocks with strong institutional interest
+      </p>
+    </div>
+  )
+}
+
+function Section({
+  title,
+  children,
+}: {
+  title: string
+  children: React.ReactNode
+}) {
+  return (
+    <div>
+      <h2 className="text-xl font-semibold mb-4">{title}</h2>
+      <div className="space-y-3">{children}</div>
+    </div>
+  )
+}
+
+function StockRow({ stock }: { stock: Stock }) {
+  const buyPct = Math.round(
+    (stock.buyVolume / stock.totalVolume) * 100
+  )
+  const sellPct = 100 - buyPct
+
+  return (
+    <div className="border rounded-lg p-4 flex justify-between items-center">
+      {/* LEFT */}
+      <div>
+        <div className="font-semibold">
+          {stock.symbol}{' '}
+          <span className="text-sm text-gray-500">
+            {stock.name}
+          </span>
+        </div>
+        <div className="text-sm text-gray-600">
+          ₹{stock.price} ·{' '}
+          <span
+            className={
+              stock.changePercent >= 0
+                ? 'text-green-600'
+                : 'text-red-600'
+            }
+          >
+            {stock.changePercent}%
+          </span>{' '}
+          · Strong Buy{' '}
+          <span className="text-green-700 font-medium">
+            {stock.strongBuyPercent}%
+          </span>
+        </div>
+      </div>
+
+      {/* RIGHT */}
+      <div className="text-right text-sm space-y-1">
+        <div>
+          Total Vol:{' '}
+          <span className="font-medium">
+            {format(stock.totalVolume)}
+          </span>
+        </div>
+
+        <div className="flex gap-3 justify-end">
+          <span className="text-green-600">
+            Buy {format(stock.buyVolume)} ({buyPct}%)
+          </span>
+          <span className="text-red-600">
+            Sell {format(stock.sellVolume)} ({sellPct}%)
+          </span>
+        </div>
+
+        {/* Buy vs Sell Bar */}
+        <div className="h-2 w-40 bg-gray-200 rounded overflow-hidden">
+          <div
+            className="h-full bg-green-500"
+            style={{ width: `${buyPct}%` }}
+          />
+        </div>
       </div>
     </div>
-  );
+  )
+}
+
+function EmptyState({ message }: { message: string }) {
+  return (
+    <div className="text-gray-500 italic text-sm">
+      {message}
+    </div>
+  )
+}
+
+/* ---------------- UTILS ---------------- */
+
+function format(value: number) {
+  return Intl.NumberFormat('en-IN', {
+    notation: 'compact',
+  }).format(value)
 }
