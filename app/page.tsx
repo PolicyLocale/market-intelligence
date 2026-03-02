@@ -49,7 +49,7 @@ export default function StocksPage() {
         const change = Number(d[2] ?? 0);
         const volume = Number(d[3] ?? 0);
 
-        // Buy/Sell volume inference (unchanged logic)
+        // Buy/Sell volume inference
         const buyVolume = change >= 0 ? volume * 0.6 : volume * 0.4;
         const sellVolume = volume - buyVolume;
 
@@ -57,9 +57,7 @@ export default function StocksPage() {
           100,
           Math.max(
             0,
-            Math.round(
-              Math.abs(change) * 15 + (volume / 1_000_000) * 20
-            )
+            Math.round(Math.abs(change) * 15 + (volume / 1_000_000) * 20)
           )
         );
 
@@ -131,31 +129,27 @@ export default function StocksPage() {
         {filteredStocks.map((s, idx) => (
           <div
             key={idx}
-            className="bg-zinc-900 border border-zinc-800 rounded p-3 text-xs space-y-1"
+            className={`bg-zinc-900 border border-zinc-800 rounded p-3 text-xs space-y-1 relative ${
+              s.probability === 100 ? "ring-2 ring-yellow-400" : ""
+            }`}
           >
+            {/* Badge for 100% confidence */}
+            {s.probability === 100 && (
+              <span className="absolute top-1 right-1 bg-yellow-400 text-black px-1 text-[9px] font-bold rounded-full">
+                100%
+              </span>
+            )}
+
             {/* Line 1 */}
             <div className="flex justify-between font-semibold">
               <span>
                 {s.symbol}{" "}
-                <span
-                  className={
-                    s.change >= 0
-                      ? "text-green-400"
-                      : "text-red-400"
-                  }
-                >
+                <span className={s.change >= 0 ? "text-green-400" : "text-red-400"}>
                   ({s.change >= 0 ? "+" : ""}
                   {s.change.toFixed(2)}%)
                 </span>
               </span>
-
-              <span
-                className={
-                  s.signal === "STRONG BUY"
-                    ? "text-green-400"
-                    : "text-green-300"
-                }
-              >
+              <span className={s.signal === "STRONG BUY" ? "text-green-400" : "text-green-300"}>
                 {s.signal} • {s.probability}%
               </span>
             </div>
@@ -163,23 +157,15 @@ export default function StocksPage() {
             {/* Line 2 */}
             <div className="flex justify-between text-zinc-300">
               <span>₹ {s.price.toFixed(2)}</span>
-              <span className="text-green-400">
-                T: {s.target.toFixed(2)}
-              </span>
-              <span className="text-red-400">
-                SL: {s.stopLoss.toFixed(2)}
-              </span>
+              <span className="text-green-400">T: {s.target.toFixed(2)}</span>
+              <span className="text-red-400">SL: {s.stopLoss.toFixed(2)}</span>
             </div>
 
             {/* Line 3 */}
             <div className="flex justify-between text-zinc-400">
               <span>Vol: {(s.volume / 1000).toFixed(0)}K</span>
-              <span className="text-green-400">
-                B.Vol: {(s.buyVolume / 1000).toFixed(0)}K
-              </span>
-              <span className="text-red-400">
-                S.Vol: {(s.sellVolume / 1000).toFixed(0)}K
-              </span>
+              <span className="text-green-400">B.Vol: {(s.buyVolume / 1000).toFixed(0)}K</span>
+              <span className="text-red-400">S.Vol: {(s.sellVolume / 1000).toFixed(0)}K</span>
             </div>
           </div>
         ))}
@@ -189,15 +175,7 @@ export default function StocksPage() {
 }
 
 /* Tab Component */
-function Tab({
-  label,
-  active,
-  onClick,
-}: {
-  label: string;
-  active: boolean;
-  onClick: () => void;
-}) {
+function Tab({ label, active, onClick }: { label: string; active: boolean; onClick: () => void }) {
   return (
     <button
       onClick={onClick}
