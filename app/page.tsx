@@ -29,9 +29,7 @@ export default function StocksPage() {
   const scanStocks = useCallback(async () => {
     setLoading(true)
     try {
-      const res = await fetch('/api/stocks/scan', {
-        cache: 'no-store',
-      })
+      const res = await fetch('/api/stocks/scan', { cache: 'no-store' })
       const data = await res.json()
       setStocks(data)
       setLastUpdated(new Date())
@@ -43,12 +41,11 @@ export default function StocksPage() {
     }
   }, [])
 
-  /* Initial load */
   useEffect(() => {
     scanStocks()
   }, [scanStocks])
 
-  /* ---------------- FILTERING ---------------- */
+  /* ---------------- FILTERING LOGIC ---------------- */
 
   const topGainers = stocks.filter(
     s =>
@@ -64,9 +61,7 @@ export default function StocksPage() {
       s.strongBuyPercent >= 75
   )
 
-  const intradayMovers = stocks.filter(
-    s => s.isIntradayMover
-  )
+  const intradayMovers = stocks.filter(s => s.isIntradayMover)
 
   const visibleStocks =
     activeTab === 'GAINERS'
@@ -79,16 +74,16 @@ export default function StocksPage() {
     <div className="min-h-screen bg-black text-white">
       <div className="max-w-5xl mx-auto p-4 space-y-6">
         {/* HEADER */}
-        <header className="space-y-1">
+        <header>
           <h1 className="text-2xl font-semibold">
             Anto&apos;s Market Engine
           </h1>
           <p className="text-sm text-gray-400">
-            High-conviction scans · Zero noise
+            High-conviction market scanner
           </p>
         </header>
 
-        {/* FILTER BAR + SCAN */}
+        {/* FILTER BAR */}
         <div className="flex items-center justify-between border-b border-gray-800 pb-2">
           <FilterTabs activeTab={activeTab} onChange={setActiveTab} />
 
@@ -108,7 +103,7 @@ export default function StocksPage() {
           </div>
         </div>
 
-        {/* CONTENT */}
+        {/* STOCK LIST */}
         <div className="space-y-4">
           {visibleStocks.map(stock => (
             <StockCard key={stock.symbol} stock={stock} />
@@ -152,44 +147,106 @@ function FilterTabs({
   )
 }
 
-/* ---------------- STOCK CARD ---------------- */
+/* ---------------- ENGAGING STOCK CARD ---------------- */
 
 function StockCard({ stock }: { stock: Stock }) {
+  const isGreen = stock.changePercent >= 0
+
   const buyPct =
     stock.totalVolume > 0
       ? Math.round((stock.buyVolume / stock.totalVolume) * 100)
       : 0
 
+  const sellPct = 100 - buyPct
+
+  const conviction =
+    stock.strongBuyPercent >= 90
+      ? 'HIGH'
+      : stock.strongBuyPercent >= 80
+      ? 'MEDIUM'
+      : 'LOW'
+
+  const glow =
+    conviction === 'HIGH'
+      ? isGreen
+        ? 'shadow-[0_0_18px_rgba(34,197,94,0.35)]'
+        : 'shadow-[0_0_18px_rgba(239,68,68,0.35)]'
+      : ''
+
   return (
-    <div className="border border-gray-800 rounded-lg p-4 bg-black">
-      <div className="flex justify-between">
+    <div
+      className={`relative border rounded-lg p-4 bg-black transition-all duration-300
+        ${isGreen ? 'border-green-700/40' : 'border-red-700/40'}
+        ${glow}
+        hover:scale-[1.01]
+      `}
+    >
+      {/* SIGNAL STRIP */}
+      <div
+        className={`absolute left-0 top-0 h-full w-1 rounded-l
+          ${isGreen ? 'bg-green-500' : 'bg-red-500'}
+          ${conviction === 'HIGH' ? 'animate-pulse' : ''}
+        `}
+      />
+
+      <div className="flex justify-between gap-4">
+        {/* LEFT */}
         <div>
-          <div className="font-semibold">
+          <div className="font-semibold tracking-wide">
             {stock.symbol}{' '}
             <span className="text-sm text-gray-400">
               {stock.name}
             </span>
           </div>
-          <div className="text-sm">
-            ₹{stock.price}{' '}
+
+          <div className="text-sm mt-1 flex items-center gap-2">
+            <span className="text-white font-medium">
+              ₹{stock.price}
+            </span>
             <span
-              className={
-                stock.changePercent >= 0
-                  ? 'text-green-500'
-                  : 'text-red-500'
-              }
+              className={`font-semibold flex items-center gap-1
+                ${isGreen ? 'text-green-400' : 'text-red-400'}
+              `}
             >
+              {isGreen ? '▲ +' : '▼ '}
               {stock.changePercent}%
             </span>
           </div>
+
+          {/* BUY / SELL VOLUME */}
+          <div className="mt-3 text-xs text-gray-400">
+            <div className="flex justify-between mb-1">
+              <span className="text-green-400">Buy {buyPct}%</span>
+              <span className="text-red-400">Sell {sellPct}%</span>
+            </div>
+            <div className="h-1.5 w-48 bg-gray-800 rounded overflow-hidden">
+              <div
+                className="h-full bg-green-500 transition-all duration-500"
+                style={{ width: `${buyPct}%` }}
+              />
+            </div>
+          </div>
         </div>
 
-        <div className="text-right text-sm">
-          <div className="text-green-500">
+        {/* RIGHT */}
+        <div className="text-right text-sm min-w-[130px]">
+          <div className="text-green-400 font-medium">
             Strong Buy {stock.strongBuyPercent}%
           </div>
-          <div className="text-xs text-gray-400">
+          <div className="text-xs text-gray-400 mt-1">
             Bounce {stock.bounceMomentum}%
+          </div>
+
+          <div
+            className={`mt-2 inline-block text-[10px] px-2 py-0.5 rounded
+              ${
+                conviction === 'HIGH'
+                  ? 'bg-green-900 text-green-300'
+                  : 'bg-gray-800 text-gray-400'
+              }
+            `}
+          >
+            {conviction} CONVICTION
           </div>
         </div>
       </div>
@@ -197,7 +254,7 @@ function StockCard({ stock }: { stock: Stock }) {
   )
 }
 
-/* ---------------- STATES ---------------- */
+/* ---------------- EMPTY STATE ---------------- */
 
 function EmptyState() {
   return (
