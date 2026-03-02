@@ -10,7 +10,7 @@ export default function StocksPage() {
   const [error, setError] = useState<string | null>(null);
   const [view, setView] = useState<ViewMode>("momentum");
 
-  /* ✅ WORKING CONNECTIVITY — DO NOT TOUCH */
+  /* ✅ WORKING CONNECTIVITY — UNCHANGED */
   const scanStocks = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -28,10 +28,7 @@ export default function StocksPage() {
       });
 
       const text = await res.text();
-
-      if (!res.ok) {
-        throw new Error(`Scan failed with status ${res.status}`);
-      }
+      if (!res.ok) throw new Error(`Scan failed ${res.status}`);
 
       const data = JSON.parse(text);
       setStocks(Array.isArray(data?.data) ? data.data : []);
@@ -43,7 +40,7 @@ export default function StocksPage() {
     }
   }, []);
 
-  /* ✅ UI-ONLY DERIVED DATA */
+  /* ✅ UI-ONLY INTELLIGENCE */
   const filteredStocks = useMemo(() => {
     return stocks
       .map((row) => {
@@ -52,6 +49,7 @@ export default function StocksPage() {
         const change = Number(d[2] ?? 0);
         const volume = Number(d[3] ?? 0);
 
+        // Buy/Sell volume inference (unchanged logic)
         const buyVolume = change >= 0 ? volume * 0.6 : volume * 0.4;
         const sellVolume = volume - buyVolume;
 
@@ -65,9 +63,7 @@ export default function StocksPage() {
           )
         );
 
-        const signal =
-          probability >= 75 ? "STRONG BUY" : "BUY";
-
+        const signal = probability >= 75 ? "STRONG BUY" : "BUY";
         const target = price * (1 + probability / 200);
         const stopLoss = price * (1 - probability / 300);
 
@@ -84,6 +80,9 @@ export default function StocksPage() {
           stopLoss,
         };
       })
+      /* ✅ FILTER: REMOVE STOCKS WITH ZERO BUY VOLUME */
+      .filter((s) => s.buyVolume > 0)
+      /* VIEW-WISE FILTERING */
       .filter((s) => {
         if (view === "momentum") return s.change > 0;
         if (view === "bounce") return s.change < 0 && s.probability >= 50;
@@ -91,10 +90,9 @@ export default function StocksPage() {
           return Math.abs(s.change) >= 1.5 && s.volume > 1_000_000;
         return true;
       })
+      /* SORTING */
       .sort((a, b) => {
-        if (view === "momentum") {
-          return b.probability - a.probability;
-        }
+        if (view === "momentum") return b.probability - a.probability;
         return Math.abs(b.change) - Math.abs(a.change);
       });
   }, [stocks, view]);
@@ -137,7 +135,20 @@ export default function StocksPage() {
           >
             {/* Line 1 */}
             <div className="flex justify-between font-semibold">
-              <span>{s.symbol}</span>
+              <span>
+                {s.symbol}{" "}
+                <span
+                  className={
+                    s.change >= 0
+                      ? "text-green-400"
+                      : "text-red-400"
+                  }
+                >
+                  ({s.change >= 0 ? "+" : ""}
+                  {s.change.toFixed(2)}%)
+                </span>
+              </span>
+
               <span
                 className={
                   s.signal === "STRONG BUY"
@@ -164,10 +175,10 @@ export default function StocksPage() {
             <div className="flex justify-between text-zinc-400">
               <span>Vol: {(s.volume / 1000).toFixed(0)}K</span>
               <span className="text-green-400">
-                B: {(s.buyVolume / 1000).toFixed(0)}K
+                B.Vol: {(s.buyVolume / 1000).toFixed(0)}K
               </span>
               <span className="text-red-400">
-                S: {(s.sellVolume / 1000).toFixed(0)}K
+                S.Vol: {(s.sellVolume / 1000).toFixed(0)}K
               </span>
             </div>
           </div>
@@ -177,7 +188,7 @@ export default function StocksPage() {
   );
 }
 
-/* Tab Component (unchanged logic) */
+/* Tab Component */
 function Tab({
   label,
   active,
