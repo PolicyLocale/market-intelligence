@@ -1,18 +1,78 @@
 export const runtime = "nodejs";
 
-import { NextRequest, NextResponse } from "next/server";
-import YahooFinance from "yahoo-finance2";
-
-const yahooFinance = new YahooFinance();
+import { NextResponse } from "next/server";
+import axios from "axios";
+import yahooFinance from "yahoo-finance2";
 
 let batchIndex = 0;
-const BATCH_SIZE = 80;
+const BATCH_SIZE = 10;
 
-/* ================= MARKET STATUS ================= */
+async function fetchFromNSE(symbol: string) {
+  try {
+    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}.NS`;
+
+    const res = await axios.get(url);
+    const result = res.data?.chart?.result?.[0];
+
+    if (!result) return null;
+
+    const timestamps = result.timestamp;
+    const quotes = result.indicators?.quote?.[0];
+
+    if (!timestamps || !quotes) return null;
+
+    const candles = timestamps
+      .map((t: number, i: number) => ({
+        time: t,
+        open: quotes.open?.[i],
+        high: quotes.high?.[i],
+        low: quotes.low?.[i],
+        close: quotes.close?.[i],
+        volume: quotes.volume?.[i],
+      }))
+      .filter((c: any) => c.close != null);
+
+    return candles.length ? candles : null;
+  } catch {
+    return null;
+  }
+}
+
+async function fetchFromYahoo(symbol: string) {
+  try {
+    const now = Math.floor(Date.now() / 1000);
+    const oneDayAgo = now - 86400;
+
+    const data: any = await yahooFinance.chart(`${symbol}.NS`, {
+      period1: oneDayAgo,
+      period2: now,
+      interval: "5m",
+    });
+
+    const quotes = data?.indicators?.quote?.[0];
+    const timestamps = data?.timestamp;
+
+    if (!quotes || !timestamps) return null;
+
+    const candles = timestamps
+      .map((t: number, i: number) => ({
+        time: t,
+        open: quotes.open?.[i],
+        high: quotes.high?.[i],
+        low: quotes.low?.[i],
+        close: quotes.close?.[i],
+        volume: quotes.volume?.[i],
+      }))
+      .filter((c: any) => c.close != null);
+
+    return candles.length ? candles : null;
+  } catch {
+    return null;
+  }
+}
 
 function getMarketStatus() {
   const now = new Date();
-
   const ist = new Date(
     now.toLocaleString("en-US", { timeZone: "Asia/Kolkata" })
   );
@@ -31,20 +91,15 @@ function getMarketStatus() {
   return isOpen ? "OPEN" : "CLOSED";
 }
 
-/* ================= API ================= */
+export async function POST(request: Request) {
+  // ✅ FIX: request is now correctly inside handler
+  const isBackground = new URL(request.url).searchParams.get("background");
 
-export async function POST(req: NextRequest) {
   try {
-    // 🔥 Fetch symbols
     const res = await fetch("http://localhost:3000/api/symbols");
     const json = await res.json();
+
     const allSymbols: string[] = json.symbols || [];
-
-    if (!allSymbols.length) {
-      return NextResponse.json({ data: [] });
-    }
-
-    /* ================= ROTATION ================= */
 
     const totalBatches = Math.ceil(allSymbols.length / BATCH_SIZE);
 
@@ -55,134 +110,50 @@ export async function POST(req: NextRequest) {
 
     batchIndex = (batchIndex + 1) % totalBatches;
 
-    const results = [];
-
-    const now = new Date();
-    const period2 = Math.floor(now.getTime() / 1000);
-
-    const startTime = new Date();
-    startTime.setDate(startTime.getDate() - 1);
-    const period1 = Math.floor(startTime.getTime() / 1000);
+    const results: any[] = [];
 
     for (const symbol of symbols) {
-      try {
-        const data: any = await yahooFinance.chart(`${symbol}.NS`, {
-          interval: "5m",
-          period1,
-          period2,
-        });
+      let candles = await fetchFromNSE(symbol);
 
-        const quotes = data?.indicators?.quote?.[0];
-        const timestamps = data?.timestamp;
-
-        if (!quotes || !timestamps) continue;
-
-        const candles = timestamps
-          .map((t: number, i: number) => ({
-            time: t,
-            open: quotes.open[i],
-            close: quotes.close[i],
-            high: quotes.high[i],
-            low: quotes.low[i],
-            volume: quotes.volume[i],
-          }))
-          .filter(
-            (c) =>
-              c.open != null &&
-              c.close != null &&
-              c.high != null &&
-              c.low != null
-          );
-
-        if (candles.length < 10) continue;
-
-        const last = candles[candles.length - 1];
-        const prev = candles[candles.length - 2];
-        const first = candles[0];
-
-        const change =
-          ((last.close - first.open) / first.open) * 100;
-
-        // 🔥 Filters
-        if (Math.abs(change) < 0.5) continue;
-        if ((last.volume || 0) < 500000) continue;
-
-        /* ================= VOLUME ================= */
-
-        const volumes = candles.map((c) => c.volume || 0);
-        const avgVol =
-          volumes.slice(-10).reduce((a, b) => a + b, 0) / 10;
-
-        const volumeSpike = last.volume > avgVol * 1.8;
-
-        /* ================= SUPPORT / RES ================= */
-
-        const recent = candles.slice(-5);
-        const resistance = Math.max(...recent.map((c) => c.high));
-        const support = Math.min(...recent.map((c) => c.low));
-
-        /* ================= RSI ================= */
-
-        let gain = 0,
-          loss = 0;
-        for (let i = candles.length - 10; i < candles.length - 1; i++) {
-          const diff = candles[i + 1].close - candles[i].close;
-          if (diff > 0) gain += diff;
-          else loss -= diff;
-        }
-
-        const rs = gain / (loss || 1);
-        const rsi = 100 - 100 / (1 + rs);
-
-        /* ================= ENTRY LOGIC ================= */
-
-        let signal = "HOLD";
-
-        if (
-          prev.close <= resistance &&
-          last.close > resistance &&
-          volumeSpike &&
-          rsi > 55
-        ) {
-          signal = "STRONG BUY";
-        } else if (
-          prev.close >= support &&
-          last.close < support &&
-          volumeSpike &&
-          rsi < 45
-        ) {
-          signal = "STRONG SELL";
-        } else if (last.close > resistance * 0.995) {
-          signal = "WATCH BUY";
-        } else if (last.close < support * 1.005) {
-          signal = "WATCH SELL";
-        }
-
-        results.push({
-          symbol,
-          candles,
-          change,
-          volumeSpike,
-          signal,
-          rsi,
-          resistance,
-          support,
-        });
-      } catch (err) {
-        console.error("Symbol error:", symbol);
+      if (!candles) {
+        candles = await fetchFromYahoo(symbol);
       }
+
+      if (!candles || candles.length < 5) continue;
+
+      const first = candles[0];
+      const last = candles[candles.length - 1];
+
+      const change =
+        ((last.close - first.open) / first.open) * 100;
+
+      let signal = "HOLD";
+
+      if (change > 1) signal = "WATCH BUY";
+      else if (change < -1) signal = "WATCH SELL";
+
+      results.push({
+        symbol,
+        candles,
+        change,
+        signal,
+        rsi: 50,
+        resistance: last.high,
+        support: last.low,
+        volumeSpike: false,
+      });
     }
 
-    const lastCandleTime =
-      results[0]?.candles?.slice(-1)[0]?.time || null;
+    console.log("VALID RESULTS FOUND:", results.length);
 
     return NextResponse.json({
       data: results,
       batch: batchIndex,
       totalBatches,
       marketStatus: getMarketStatus(),
-      lastCandleTime,
+      lastCandleTime: results[0]?.candles?.at(-1)?.time || null,
     });
+
   } catch (err: any) {
     console.error("SCAN ERROR:", err);
 

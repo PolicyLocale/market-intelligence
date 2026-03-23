@@ -24,25 +24,25 @@ export default function Page() {
       setMarketStatus(json.marketStatus);
 
       if (json.lastCandleTime) {
-        const date = new Date(json.lastCandleTime * 1000);
-        setLastCandle(date.toLocaleTimeString());
+        const d = new Date(json.lastCandleTime * 1000);
+        setLastCandle(d.toLocaleTimeString());
       }
 
       const strong = json.data
         .filter((s:any) =>
-          ["STRONG BUY","STRONG SELL"].includes(s.signal)
+          s.signal.includes("BUY") || s.signal.includes("SELL")
         )
-        .slice(0,3);
+        .slice(0, 3);
 
       const watch = json.data
         .filter((s:any) => s.signal.includes("WATCH"))
-        .slice(0,5);
+        .slice(0, 5);
 
       const movers = json.data
         .sort((a:any,b:any)=> Math.abs(b.change) - Math.abs(a.change))
-        .slice(0,5);
+        .slice(0, 5);
 
-      setTrades(prev => [...prev, ...strong].slice(0,10));
+      setTrades(prev => [...prev, ...strong].slice(0, 10));
       setWatchlist(watch);
       setMovers(movers);
 
@@ -64,35 +64,26 @@ export default function Page() {
       <div className="flex justify-between">
         <b>{s.symbol}</b>
         <span className={
-          s.signal.includes("BUY")?"text-green-400":
-          s.signal.includes("SELL")?"text-red-400":"text-yellow-400"
+          s.signal.includes("BUY")
+            ? "text-green-400"
+            : s.signal.includes("SELL")
+            ? "text-red-400"
+            : "text-yellow-400"
         }>
           {s.signal}
         </span>
       </div>
 
-      <div>RSI: {s.rsi?.toFixed(1)}</div>
-
-      <div>
-        Break: {s.signal.includes("BUY")
-          ? s.resistance?.toFixed(2)
-          : s.support?.toFixed(2)}
-      </div>
-
-      <div className="text-green-400">
-        Vol: {s.volumeSpike ? "SPIKE" : "Normal"}
-      </div>
-
-      <div className={s.change >= 0 ? "text-green-400" : "text-red-400"}>
-        {s.change?.toFixed(2)}%
-      </div>
+      <div>Change: {s.change?.toFixed(2)}%</div>
+      <div>RSI: {s.rsi}</div>
+      <div>₹ {s.candles?.at(-1)?.close}</div>
     </div>
   );
 
   return (
     <div className="p-6 bg-black text-white min-h-screen space-y-6">
 
-      <div className="flex justify-between items-center">
+      <div className="flex justify-between">
         <h1 className="text-xl font-bold">📊 Trading Engine</h1>
 
         <div className="text-right text-xs">
@@ -104,13 +95,8 @@ export default function Page() {
             Market: {marketStatus}
           </div>
 
-          <div className="text-zinc-400">
-            Last Candle: {lastCandle || "-"}
-          </div>
-
-          <div className="text-zinc-500">
-            {batchInfo}
-          </div>
+          <div>Last Candle: {lastCandle || "-"}</div>
+          <div className="text-zinc-500">{batchInfo}</div>
         </div>
       </div>
 

@@ -1,4 +1,8 @@
 import "./globals.css";
+import { startScanWorker } from "../lib/scanWorker";
+
+// Start only once (server-side)
+startScanWorker();
 
 export const metadata = {
   title: "Anto Market Intelligence",

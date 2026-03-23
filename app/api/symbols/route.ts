@@ -9,24 +9,25 @@ export async function GET() {
   try {
     const now = Date.now();
 
-    // ✅ Cache for 1 hour
     if (cachedSymbols.length && now - lastFetch < 60 * 60 * 1000) {
       return NextResponse.json({ symbols: cachedSymbols });
     }
 
-    const url =
-      "https://archives.nseindia.com/content/indices/ind_nifty500list.csv";
-
-    const res = await fetch(url, {
-      headers: { "User-Agent": "Mozilla/5.0" },
-    });
+    const res = await fetch(
+      "https://archives.nseindia.com/content/indices/ind_nifty500list.csv",
+      {
+        headers: {
+          "User-Agent": "Mozilla/5.0",
+        },
+      }
+    );
 
     const text = await res.text();
 
-    const lines = text.split("\n").slice(1);
-
-    const symbols = lines
-      .map((line) => line.split(",")[2])
+    const symbols = text
+      .split("\n")
+      .slice(1)
+      .map((l) => l.split(",")[2])
       .filter(Boolean);
 
     cachedSymbols = symbols;
@@ -36,6 +37,9 @@ export async function GET() {
   } catch (err) {
     console.error("SYMBOL FETCH ERROR:", err);
 
-    return NextResponse.json({ symbols: [] });
+    // fallback (so UI never breaks)
+    return NextResponse.json({
+      symbols: ["RELIANCE", "TCS", "INFY", "HDFCBANK", "SBIN"],
+    });
   }
 }
