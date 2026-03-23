@@ -1,262 +1,141 @@
 "use client";
 
-import { useState, useCallback, useEffect, useRef } from "react";
-
-type Trade = {
-  symbol: string;
-  signal: string;
-  entry: number;
-  target: number;
-  sl: number;
-  price?: number;
-};
+import { useState, useEffect, useCallback, useRef } from "react";
 
 export default function Page() {
-  const [trades, setTrades] = useState<Trade[]>([]);
-  const prevSignals = useRef<Record<string, string>>({});
+  const [trades, setTrades] = useState<any[]>([]);
+  const [watchlist, setWatchlist] = useState<any[]>([]);
+  const [movers, setMovers] = useState<any[]>([]);
+  const [batchInfo, setBatchInfo] = useState("");
+  const [marketStatus, setMarketStatus] = useState("");
+  const [lastCandle, setLastCandle] = useState("");
 
-  /* =========================
-     🔁 MAIN SCAN (5 MIN)
-  ========================= */
+  const isFetching = useRef(false);
 
   const scan = useCallback(async () => {
-    const res = await fetch("/api/scan", {
-      method: "POST",
-      body: JSON.stringify({
-        symbols: ["RELIANCE", "TCS", "INFY", "HDFCBANK", "SBIN"],
-      }),
-    });
+    if (isFetching.current) return;
+    isFetching.current = true;
 
-    const json = await res.json();
+    try {
+      const res = await fetch("/api/scan", { method: "POST" });
+      const json = await res.json();
 
-    const processed = (json.data || [])
-      .map((s: any) => {
-        const result = analyze(s.candles);
-        const levels = getLevels(s.candles, result.signal);
-        const score = getScore(result, s.candles);
+      setBatchInfo(`Batch ${json.batch}/${json.totalBatches}`);
+      setMarketStatus(json.marketStatus);
 
-        return {
-          symbol: s.symbol,
-          ...result,
-          ...levels,
-          score,
-        };
-      })
-      .filter((s: any) => s.signal !== "HOLD")
-      .sort((a: any, b: any) => b.score - a.score)
-      .slice(0, 3);
+      if (json.lastCandleTime) {
+        const date = new Date(json.lastCandleTime * 1000);
+        setLastCandle(date.toLocaleTimeString());
+      }
 
-    triggerAlerts(processed);
-    setTrades(processed);
+      const strong = json.data
+        .filter((s:any) =>
+          ["STRONG BUY","STRONG SELL"].includes(s.signal)
+        )
+        .slice(0,3);
+
+      const watch = json.data
+        .filter((s:any) => s.signal.includes("WATCH"))
+        .slice(0,5);
+
+      const movers = json.data
+        .sort((a:any,b:any)=> Math.abs(b.change) - Math.abs(a.change))
+        .slice(0,5);
+
+      setTrades(prev => [...prev, ...strong].slice(0,10));
+      setWatchlist(watch);
+      setMovers(movers);
+
+    } catch (err) {
+      console.error(err);
+    }
+
+    isFetching.current = false;
   }, []);
-
-  /* =========================
-     ⚡ LIVE PRICE (5 SEC)
-  ========================= */
-
-  const updatePrices = useCallback(async () => {
-    if (!trades.length) return;
-
-    const res = await fetch("/api/price", {
-      method: "POST",
-      body: JSON.stringify({
-        symbols: trades.map((t) => t.symbol),
-      }),
-    });
-
-    const json = await res.json();
-
-    setTrades((prev) =>
-      prev.map((t) => {
-        const live = json.data.find(
-          (d: any) => d.symbol === t.symbol
-        );
-
-        if (!live) return t;
-
-        const newPrice = live.price;
-
-        /* 🔥 TRAILING SL */
-        let newSL = t.sl;
-
-        if (t.signal.includes("BUY") && newPrice > t.entry) {
-          newSL = Math.max(t.sl, newPrice * 0.995);
-        }
-
-        if (t.signal.includes("SELL") && newPrice < t.entry) {
-          newSL = Math.min(t.sl, newPrice * 1.005);
-        }
-
-        return {
-          ...t,
-          price: newPrice,
-          sl: newSL,
-        };
-      })
-    );
-  }, [trades]);
-
-  /* =========================
-     🔁 INTERVALS
-  ========================= */
 
   useEffect(() => {
     scan();
+    const i = setInterval(scan, 300000);
+    return () => clearInterval(i);
+  }, []);
 
-    const scanInterval = setInterval(scan, 300000);
-    const priceInterval = setInterval(updatePrices, 5000);
+  const Card = ({s}:{s:any}) => (
+    <div className="bg-zinc-900 p-3 rounded text-xs">
+      <div className="flex justify-between">
+        <b>{s.symbol}</b>
+        <span className={
+          s.signal.includes("BUY")?"text-green-400":
+          s.signal.includes("SELL")?"text-red-400":"text-yellow-400"
+        }>
+          {s.signal}
+        </span>
+      </div>
 
-    return () => {
-      clearInterval(scanInterval);
-      clearInterval(priceInterval);
-    };
-  }, [scan, updatePrices]);
+      <div>RSI: {s.rsi?.toFixed(1)}</div>
 
-  /* =========================
-     📊 INDICATORS
-  ========================= */
+      <div>
+        Break: {s.signal.includes("BUY")
+          ? s.resistance?.toFixed(2)
+          : s.support?.toFixed(2)}
+      </div>
 
-  function calculateVWAP(c: any[]) {
-    let tpv = 0,
-      vol = 0;
-    c.forEach((x) => {
-      const tp = (x.high + x.low + x.close) / 3;
-      tpv += tp * x.volume;
-      vol += x.volume;
-    });
-    return tpv / vol;
-  }
+      <div className="text-green-400">
+        Vol: {s.volumeSpike ? "SPIKE" : "Normal"}
+      </div>
 
-  function calculateRSI(c: any[]) {
-    let g = 0,
-      l = 0;
-    for (let i = 1; i < c.length; i++) {
-      const d = c[i].close - c[i - 1].close;
-      if (d > 0) g += d;
-      else l -= d;
-    }
-    const rs = g / (l || 1);
-    return 100 - 100 / (1 + rs);
-  }
-
-  /* =========================
-     🧠 STRATEGY
-  ========================= */
-
-  function analyze(c: any[]) {
-    const l5 = c.slice(-5);
-    const last = l5[l5.length - 1];
-    const prev = l5[l5.length - 2];
-
-    const vwap = calculateVWAP(c);
-    const rsi = calculateRSI(c);
-
-    const highs = l5.map((x) => x.high);
-    const lows = l5.map((x) => x.low);
-
-    const res = Math.max(...highs);
-    const sup = Math.min(...lows);
-
-    if (last.close > res && rsi > 55)
-      return { signal: "BREAKOUT BUY", vwap, rsi };
-
-    if (last.close < sup && rsi < 45)
-      return { signal: "BREAKDOWN SELL", vwap, rsi };
-
-    if (prev.close < vwap && last.close > vwap)
-      return { signal: "VWAP BUY", vwap, rsi };
-
-    if (prev.close > vwap && last.close < vwap)
-      return { signal: "VWAP SELL", vwap, rsi };
-
-    return { signal: "HOLD", vwap, rsi };
-  }
-
-  function getLevels(c: any[], signal: string) {
-    const last = c[c.length - 1];
-
-    if (signal.includes("BUY"))
-      return {
-        entry: last.close,
-        target: last.close * 1.01,
-        sl: last.low,
-      };
-
-    if (signal.includes("SELL"))
-      return {
-        entry: last.close,
-        target: last.close * 0.99,
-        sl: last.high,
-      };
-
-    return {};
-  }
-
-  function getScore(a: any, c: any[]) {
-    let s = 0;
-    if (a.signal.includes("BREAKOUT")) s += 50;
-    if (a.signal.includes("VWAP")) s += 40;
-    s += Math.abs(a.rsi - 50);
-    s += Math.log10(c[c.length - 1].volume || 1) * 10;
-    return s;
-  }
-
-  /* =========================
-     🔔 ALERTS
-  ========================= */
-
-  function triggerAlerts(stocks: any[]) {
-    stocks.forEach((s) => {
-      if (prevSignals.current[s.symbol] !== s.signal) {
-        new Audio(
-          "https://actions.google.com/sounds/v1/alarms/beep_short.ogg"
-        ).play();
-
-        prevSignals.current[s.symbol] = s.signal;
-      }
-    });
-  }
-
-  /* =========================
-     🎨 UI
-  ========================= */
+      <div className={s.change >= 0 ? "text-green-400" : "text-red-400"}>
+        {s.change?.toFixed(2)}%
+      </div>
+    </div>
+  );
 
   return (
-    <div className="p-6 bg-black text-white min-h-screen">
-      <h1 className="text-xl font-bold mb-4">
-        🚀 Live Intraday Engine
-      </h1>
+    <div className="p-6 bg-black text-white min-h-screen space-y-6">
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        {trades.map((t, i) => (
-          <div
-            key={i}
-            className="bg-zinc-900 p-4 rounded border ring-2 ring-yellow-400"
-          >
-            <div className="flex justify-between">
-              <strong>{t.symbol}</strong>
-              <span
-                className={
-                  t.signal.includes("BUY")
-                    ? "text-green-400"
-                    : "text-red-400"
-                }
-              >
-                {t.signal}
-              </span>
-            </div>
+      <div className="flex justify-between items-center">
+        <h1 className="text-xl font-bold">📊 Trading Engine</h1>
 
-            <div>Live: ₹{t.price?.toFixed(2) || t.entry}</div>
-
-            <div className="text-green-400">
-              Target: ₹{t.target.toFixed(2)}
-            </div>
-
-            <div className="text-red-400">
-              SL (Trailing): ₹{t.sl.toFixed(2)}
-            </div>
+        <div className="text-right text-xs">
+          <div className={
+            marketStatus === "OPEN"
+              ? "text-green-400"
+              : "text-red-400"
+          }>
+            Market: {marketStatus}
           </div>
-        ))}
+
+          <div className="text-zinc-400">
+            Last Candle: {lastCandle || "-"}
+          </div>
+
+          <div className="text-zinc-500">
+            {batchInfo}
+          </div>
+        </div>
+      </div>
+
+      <Section title="🔥 Confirmed Trades">
+        {trades.map((s,i)=><Card key={i} s={s}/>)}
+      </Section>
+
+      <Section title="👀 Watchlist">
+        {watchlist.map((s,i)=><Card key={i} s={s}/>)}
+      </Section>
+
+      <Section title="🚀 Active Movers">
+        {movers.map((s,i)=><Card key={i} s={s}/>)}
+      </Section>
+
+    </div>
+  );
+}
+
+function Section({title,children}:{title:string,children:any}){
+  return (
+    <div>
+      <h2 className="mb-2">{title}</h2>
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+        {children}
       </div>
     </div>
   );
