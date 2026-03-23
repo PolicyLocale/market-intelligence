@@ -1,45 +1,44 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
+import yahooFinance from "yahoo-finance2";
 
-export const runtime = "nodejs";
-export const dynamic = "force-dynamic";
-
-export async function POST(request: Request) {
+export async function POST(req: NextRequest) {
   try {
-    const body = await request.json();
+    const { symbols } = await req.json();
 
-    const tvResponse = await fetch(
-      "https://scanner.tradingview.com/india/scan",
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "User-Agent": "Mozilla/5.0",
-        },
-        body: JSON.stringify(body),
-      }
-    );
+    const results = [];
 
-    const text = await tvResponse.text();
+    for (const symbol of symbols) {
+      const query = `${symbol}.NS`;
 
-    // 🔍 HARD LOG — THIS IS CRITICAL
-    console.log("TradingView status:", tvResponse.status);
-    console.log("TradingView response:", text.slice(0, 300));
+      const data: any = await yahooFinance.chart(query, {
+        interval: "5m",
+        range: "1d",
+      });
 
-    if (!tvResponse.ok) {
-      return NextResponse.json(
-        { error: "TradingView rejected request", raw: text },
-        { status: 502 }
-      );
+      const quotes = data?.indicators?.quote?.[0];
+      const timestamps = data?.timestamp;
+
+      if (!quotes || !timestamps) continue;
+
+      const candles = timestamps.map((t: number, i: number) => ({
+        time: t,
+        open: quotes.open[i],
+        close: quotes.close[i],
+        high: quotes.high[i],
+        low: quotes.low[i],
+        volume: quotes.volume[i],
+      }));
+
+      results.push({
+        symbol,
+        candles,
+      });
     }
 
-    return new NextResponse(text, {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
-    });
+    return NextResponse.json({ data: results });
   } catch (err: any) {
-    console.error("Route crash:", err);
     return NextResponse.json(
-      { error: "Route crashed", message: err?.message },
+      { error: err.message },
       { status: 500 }
     );
   }

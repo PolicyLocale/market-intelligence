@@ -1,274 +1,263 @@
 "use client";
 
-import { useState, useCallback, useMemo } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 
-type ViewMode = "gainers" | "losers" | "intraday";
-
-type Candle = {
-  open: number;
-  close: number;
+type Trade = {
+  symbol: string;
+  signal: string;
+  entry: number;
+  target: number;
+  sl: number;
+  price?: number;
 };
 
-/* 🔥 SIMULATED 5-CANDLE BUILDER (Replace with real API later) */
-function buildCandles(change: number, price: number): Candle[] {
-  const candles: Candle[] = [];
+export default function Page() {
+  const [trades, setTrades] = useState<Trade[]>([]);
+  const prevSignals = useRef<Record<string, string>>({});
 
-  let base = price * (1 - change / 100);
+  /* =========================
+     🔁 MAIN SCAN (5 MIN)
+  ========================= */
 
-  for (let i = 0; i < 5; i++) {
-    const volatility = (Math.random() - 0.5) * 0.5;
-    const open = base;
-    const close = base * (1 + volatility / 100);
+  const scan = useCallback(async () => {
+    const res = await fetch("/api/scan", {
+      method: "POST",
+      body: JSON.stringify({
+        symbols: ["RELIANCE", "TCS", "INFY", "HDFCBANK", "SBIN"],
+      }),
+    });
 
-    candles.push({ open, close });
-    base = close;
-  }
+    const json = await res.json();
 
-  return candles;
-}
-
-/* 🧠 CANDLE ANALYSIS */
-function analyzeCandles(candles: Candle[]) {
-  const colors = candles.map((c) =>
-    c.close > c.open ? "GREEN" : "RED"
-  );
-
-  const last = colors.slice(-2);
-
-  if (last[0] === "RED" && last[1] === "GREEN") {
-    return "REVERSAL_UP";
-  }
-
-  if (last[0] === "GREEN" && last[1] === "RED") {
-    return "REVERSAL_DOWN";
-  }
-
-  const greenCount = colors.filter((c) => c === "GREEN").length;
-  const redCount = colors.filter((c) => c === "RED").length;
-
-  if (greenCount >= 4) return "STRONG_UP";
-  if (redCount >= 4) return "STRONG_DOWN";
-
-  return "SIDEWAYS";
-}
-
-export default function StocksPage() {
-  const [stocks, setStocks] = useState<any[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [view, setView] = useState<ViewMode>("intraday");
-
-  /* ✅ FETCH */
-  const scanStocks = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-
-    try {
-      const res = await fetch("/api/scan", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          filter: [],
-          markets: ["india"],
-          columns: ["name", "close", "change", "volume"],
-          range: [0, 100],
-        }),
-      });
-
-      const text = await res.text();
-      if (!res.ok) throw new Error(`Scan failed ${res.status}`);
-
-      const data = JSON.parse(text);
-      setStocks(Array.isArray(data?.data) ? data.data : []);
-    } catch (err: any) {
-      setError(err.message ?? "Unknown error");
-      setStocks([]);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  /* 🔥 CORE ENGINE */
-  const processed = useMemo(() => {
-    return stocks
-      .map((row) => {
-        const d = row.d ?? [];
-        const price = Number(d[1] ?? 0);
-        const change = Number(d[2] ?? 0);
-        const volume = Number(d[3] ?? 0);
-
-        /* 🎯 BUILD CANDLES */
-        const candles = buildCandles(change, price);
-
-        /* 🧠 ANALYZE */
-        const trend = analyzeCandles(candles);
-
-        /* 📊 MOMENTUM SCORE */
-        const score =
-          Math.abs(change) * 30 + Math.log10(volume + 1) * 20;
-
-        /* 🚀 SIGNAL ENGINE */
-        let signal = "HOLD";
-
-        if (trend === "REVERSAL_UP" && score > 50)
-          signal = "BUY";
-
-        if (trend === "STRONG_UP" && score > 70)
-          signal = "STRONG BUY";
-
-        if (trend === "REVERSAL_DOWN" && score > 50)
-          signal = "SELL";
-
-        if (trend === "STRONG_DOWN" && score > 70)
-          signal = "STRONG SELL";
-
-        /* 🎯 TARGET + SL */
-        const target =
-          signal.includes("BUY")
-            ? price * (1 + Math.abs(change) / 100 * 1.5)
-            : price * (1 - Math.abs(change) / 100 * 1.5);
-
-        const stopLoss =
-          signal.includes("BUY")
-            ? price * (1 - Math.abs(change) / 100)
-            : price * (1 + Math.abs(change) / 100);
+    const processed = (json.data || [])
+      .map((s: any) => {
+        const result = analyze(s.candles);
+        const levels = getLevels(s.candles, result.signal);
+        const score = getScore(result, s.candles);
 
         return {
-          symbol: row.s,
-          price,
-          change,
-          volume,
-          trend,
-          signal,
+          symbol: s.symbol,
+          ...result,
+          ...levels,
           score,
-          target,
-          stopLoss,
         };
       })
+      .filter((s: any) => s.signal !== "HOLD")
+      .sort((a: any, b: any) => b.score - a.score)
+      .slice(0, 3);
 
-      /* 🔒 QUALITY FILTER */
-      .filter((s) => s.volume > 500000 && Math.abs(s.change) > 0.5)
+    triggerAlerts(processed);
+    setTrades(processed);
+  }, []);
 
-      /* 🎯 VIEW FILTER */
-      .filter((s) => {
-        if (view === "gainers") return s.change > 0;
+  /* =========================
+     ⚡ LIVE PRICE (5 SEC)
+  ========================= */
 
-        if (view === "losers") return s.change < 0;
+  const updatePrices = useCallback(async () => {
+    if (!trades.length) return;
 
-        if (view === "intraday")
-          return (
-            s.signal === "STRONG BUY" ||
-            s.signal === "STRONG SELL"
-          );
+    const res = await fetch("/api/price", {
+      method: "POST",
+      body: JSON.stringify({
+        symbols: trades.map((t) => t.symbol),
+      }),
+    });
 
-        return true;
+    const json = await res.json();
+
+    setTrades((prev) =>
+      prev.map((t) => {
+        const live = json.data.find(
+          (d: any) => d.symbol === t.symbol
+        );
+
+        if (!live) return t;
+
+        const newPrice = live.price;
+
+        /* 🔥 TRAILING SL */
+        let newSL = t.sl;
+
+        if (t.signal.includes("BUY") && newPrice > t.entry) {
+          newSL = Math.max(t.sl, newPrice * 0.995);
+        }
+
+        if (t.signal.includes("SELL") && newPrice < t.entry) {
+          newSL = Math.min(t.sl, newPrice * 1.005);
+        }
+
+        return {
+          ...t,
+          price: newPrice,
+          sl: newSL,
+        };
       })
+    );
+  }, [trades]);
 
-      /* 📊 SORT */
-      .sort((a, b) => {
-        if (view === "gainers") return b.change - a.change;
-        if (view === "losers") return a.change - b.change;
-        return b.score - a.score;
-      });
-  }, [stocks, view]);
+  /* =========================
+     🔁 INTERVALS
+  ========================= */
+
+  useEffect(() => {
+    scan();
+
+    const scanInterval = setInterval(scan, 300000);
+    const priceInterval = setInterval(updatePrices, 5000);
+
+    return () => {
+      clearInterval(scanInterval);
+      clearInterval(priceInterval);
+    };
+  }, [scan, updatePrices]);
+
+  /* =========================
+     📊 INDICATORS
+  ========================= */
+
+  function calculateVWAP(c: any[]) {
+    let tpv = 0,
+      vol = 0;
+    c.forEach((x) => {
+      const tp = (x.high + x.low + x.close) / 3;
+      tpv += tp * x.volume;
+      vol += x.volume;
+    });
+    return tpv / vol;
+  }
+
+  function calculateRSI(c: any[]) {
+    let g = 0,
+      l = 0;
+    for (let i = 1; i < c.length; i++) {
+      const d = c[i].close - c[i - 1].close;
+      if (d > 0) g += d;
+      else l -= d;
+    }
+    const rs = g / (l || 1);
+    return 100 - 100 / (1 + rs);
+  }
+
+  /* =========================
+     🧠 STRATEGY
+  ========================= */
+
+  function analyze(c: any[]) {
+    const l5 = c.slice(-5);
+    const last = l5[l5.length - 1];
+    const prev = l5[l5.length - 2];
+
+    const vwap = calculateVWAP(c);
+    const rsi = calculateRSI(c);
+
+    const highs = l5.map((x) => x.high);
+    const lows = l5.map((x) => x.low);
+
+    const res = Math.max(...highs);
+    const sup = Math.min(...lows);
+
+    if (last.close > res && rsi > 55)
+      return { signal: "BREAKOUT BUY", vwap, rsi };
+
+    if (last.close < sup && rsi < 45)
+      return { signal: "BREAKDOWN SELL", vwap, rsi };
+
+    if (prev.close < vwap && last.close > vwap)
+      return { signal: "VWAP BUY", vwap, rsi };
+
+    if (prev.close > vwap && last.close < vwap)
+      return { signal: "VWAP SELL", vwap, rsi };
+
+    return { signal: "HOLD", vwap, rsi };
+  }
+
+  function getLevels(c: any[], signal: string) {
+    const last = c[c.length - 1];
+
+    if (signal.includes("BUY"))
+      return {
+        entry: last.close,
+        target: last.close * 1.01,
+        sl: last.low,
+      };
+
+    if (signal.includes("SELL"))
+      return {
+        entry: last.close,
+        target: last.close * 0.99,
+        sl: last.high,
+      };
+
+    return {};
+  }
+
+  function getScore(a: any, c: any[]) {
+    let s = 0;
+    if (a.signal.includes("BREAKOUT")) s += 50;
+    if (a.signal.includes("VWAP")) s += 40;
+    s += Math.abs(a.rsi - 50);
+    s += Math.log10(c[c.length - 1].volume || 1) * 10;
+    return s;
+  }
+
+  /* =========================
+     🔔 ALERTS
+  ========================= */
+
+  function triggerAlerts(stocks: any[]) {
+    stocks.forEach((s) => {
+      if (prevSignals.current[s.symbol] !== s.signal) {
+        new Audio(
+          "https://actions.google.com/sounds/v1/alarms/beep_short.ogg"
+        ).play();
+
+        prevSignals.current[s.symbol] = s.signal;
+      }
+    });
+  }
+
+  /* =========================
+     🎨 UI
+  ========================= */
 
   return (
-    <div className="min-h-screen bg-black text-white p-6">
-      {/* Header */}
-      <header className="flex justify-between items-center mb-6">
-        <h1 className="text-2xl font-bold">
-          Anto&apos;s Pro Trading Engine
-        </h1>
-        <button
-          onClick={scanStocks}
-          className="bg-green-600 hover:bg-green-700 px-4 py-2 rounded"
-        >
-          Scan Market
-        </button>
-      </header>
+    <div className="p-6 bg-black text-white min-h-screen">
+      <h1 className="text-xl font-bold mb-4">
+        🚀 Live Intraday Engine
+      </h1>
 
-      {/* Tabs */}
-      <div className="flex gap-2 mb-6">
-        <Tab label="🟢 Gainers" active={view === "gainers"} onClick={() => setView("gainers")} />
-        <Tab label="🔴 Losers" active={view === "losers"} onClick={() => setView("losers")} />
-        <Tab label="⚡ Intraday" active={view === "intraday"} onClick={() => setView("intraday")} />
-      </div>
-
-      {/* Status */}
-      {loading && <p className="text-zinc-400">Scanning...</p>}
-      {error && <p className="text-red-400">{error}</p>}
-
-      {/* Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
-        {processed.map((s, i) => (
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        {trades.map((t, i) => (
           <div
             key={i}
-            className="bg-zinc-900 border border-zinc-800 rounded p-3 text-xs space-y-1"
+            className="bg-zinc-900 p-4 rounded border ring-2 ring-yellow-400"
           >
-            <div className="flex justify-between font-semibold">
-              <span>
-                {s.symbol}{" "}
-                <span className={s.change > 0 ? "text-green-400" : "text-red-400"}>
-                  ({s.change.toFixed(2)}%)
-                </span>
-              </span>
-
+            <div className="flex justify-between">
+              <strong>{t.symbol}</strong>
               <span
                 className={
-                  s.signal.includes("BUY")
+                  t.signal.includes("BUY")
                     ? "text-green-400"
-                    : s.signal.includes("SELL")
-                    ? "text-red-400"
-                    : "text-zinc-400"
+                    : "text-red-400"
                 }
               >
-                {s.signal}
+                {t.signal}
               </span>
             </div>
 
-            <div className="text-zinc-400">
-              Trend: {s.trend}
+            <div>Live: ₹{t.price?.toFixed(2) || t.entry}</div>
+
+            <div className="text-green-400">
+              Target: ₹{t.target.toFixed(2)}
             </div>
 
-            <div className="flex justify-between">
-              <span>₹ {s.price.toFixed(2)}</span>
-              <span className="text-green-400">
-                T: {s.target.toFixed(2)}
-              </span>
-              <span className="text-red-400">
-                SL: {s.stopLoss.toFixed(2)}
-              </span>
-            </div>
-
-            <div className="text-zinc-500">
-              Vol: {(s.volume / 1000).toFixed(0)}K
+            <div className="text-red-400">
+              SL (Trailing): ₹{t.sl.toFixed(2)}
             </div>
           </div>
         ))}
       </div>
     </div>
-  );
-}
-
-function Tab({
-  label,
-  active,
-  onClick,
-}: {
-  label: string;
-  active: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      onClick={onClick}
-      className={`px-3 py-2 rounded text-sm border ${
-        active
-          ? "bg-green-600 border-green-500"
-          : "bg-zinc-900 border-zinc-700 hover:bg-zinc-800"
-      }`}
-    >
-      {label}
-    </button>
   );
 }
